@@ -10,77 +10,57 @@ from __future__ import print_function
 
 import logging
 
-from ghidra_pcode_interpreter.mem import NewRam, NewReg, NewUnique, RegModel_x64
+from ghidra_pcode_interpreter.mem import InvalidAddrException
+from ghidra_pcode_interpreter.state import State
+from ghidra_pcode_interpreter.utils import get_api_base, get_func_extents
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
-# TODO Determine these dynamically
-ARCH = RegModel_x64 
-
-def get_parameters(func):
-    def get_param_val(param):
-        print("Param {} - type {}".format(param.getName(), param.getDataType()))
-        return askBytes("Parameter Entry",
-                "Specify bytes for parameter {} type {}".format(
-                    param.getName(), param.getDataType()
-                    )
-                )
-
-
-    params = func.getParameters()
-    if len(params) == 0:
-        print("No parameters - did you commit the locals/params for the func?")
-
-    return [get_param_val(param) for param in params]
-
-def get_func_extents(func):
-    addr_set = func.getBody()
-    min_addr, max_addr = addr_set.getMinAddress(), addr_set.getMaxAddress()
-    return min_addr, max_addr
-
-def run_pcode(func, registers, ram):
-    pythonobj = getInstructionAt.__self__
-
-    start_point, func_end = get_func_extents(func)
-    logger.info("Func body {} - {}".format(start_point, func_end))
-
-    registers.store(ARCH.pcreg, ARCH.reg_len, start_point.offset)
-
-    keep_going = True
-    while keep_going:
-        if registers.load(ARCH.pcreg, ARCH.reg_len) == func_end.offset:
-            keep_going = False
-
-        cur_loc = registers.load(ARCH.pcreg, ARCH.reg_len)
-        logging.debug("Current location: 0x{:x}".format(cur_loc))
-
-        instrs, instr_size = ram.get_code(cur_loc)
-
-        # Update the prog counter
-        registers.store(ARCH.pcreg, ARCH.reg_len, 
-                registers.load(ARCH.pcreg, ARCH.reg_len) + instr_size
-                )
-
-        #uniques = NewUnique(reg_model = ARCH, pythonobj = pythonobj)
-        for instr in instrs:
-            logger.info("Instruction {}".format(instr))
-            logger.info(type(instr.pcode.inputs[0]))
-            #instr.execute(registers, ram, uniques)
-
-        #logging.debug("Ram: {}".format(ram))
-        #logging.debug("Reg: {}".format(registers))
-        #logging.debug("Uniques: {}".format(uniques))
+def print_pcode_info(func, state, stop_addr):
+    cur_loc = state.get_pc()
+    while cur_loc <= stop_addr:
+        logging.info("Current location: 0x{:x}".format(cur_loc))
+        try:
+            cur_loc = state.inspect_cur_location()
+        except InvalidAddrException as e:
+            logging.info("No code at location")
+            state.set_pc(state.get_pc() + 1)
+            cur_loc = state.get_pc()
 
 def main():
-    pythonobj = getInstructionAt.__self__
+    logging.basicConfig(level=logging.DEBUG)
+    curr_addr = 0
+    if currentLocation is None:
+        curr_addr = askAddress("Starting Address", "Provide starting address:")
+    else:
+        curr_addr = currentLocation.address
 
+    # Build the emulator state
+    state = State(get_api_base(getInstructionAt))
+
+    # Determine the function of concern
+    containing_func = None
     try:
-        containing_func = getFunctionContaining(currentLocation.address)
+        containing_func = getFunctionContaining(curr_addr)
     except:
+        pass
+    if containing_func is None:
         logger.error("Could not get containing function for selection")
         exit(1)
 
+    # Print some function info
+    start_point, func_end = get_func_extents(containing_func)
+    logger.debug("Func body {} - {}".format(start_point, func_end))
+
+    state.setup_stack()
+    state.fake_function_call(start_point.offset)
+
+    # Print state and architecture information
+    logging.info("State info: {}".format(state))
+    logging.info("Architecture info: {}".format(state.arch))
+
+    # Print some parameter info
     params = containing_func.getParameters()
     logger.info("Parameter Information")
     for param in params:
@@ -89,11 +69,7 @@ def main():
                 param.getFirstStorageVarnode())
             )
 
-    # TODO: Do memory/register setup
-    registers = NewReg(reg_model = ARCH, pythonobj = pythonobj)
-    ram = NewRam(pythonobj)
-
-    run_pcode(containing_func, registers, ram)
+    print_pcode_info(containing_func, state, func_end.offset)
 
 
 if __name__ == "__main__":

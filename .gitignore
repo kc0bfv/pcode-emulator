@@ -1,5 +1,5 @@
 *.swp
 *.class
-*.x86
+*.*.out
 *.pyc
 References/*

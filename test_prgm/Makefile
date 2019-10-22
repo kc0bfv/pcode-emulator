@@ -1,4 +1,13 @@
 CC_OPTS := -Wall
 
-all:
-	${CC} ${CC_OPTS} test.c -o test.x86
+OUT_ARCHES := x86 aarch64
+
+TEST_OUTS := $(patsubst %, test.%.out, ${OUT_ARCHES})
+
+all: ${TEST_OUTS}
+
+%.x86.out: CC=gcc
+%.aarch64.out: CC=aarch64-linux-gnu-gcc
+
+test.%.out: test.c
+	${CC} ${CC_OPTS} $< -o $@

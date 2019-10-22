@@ -12,9 +12,12 @@ import code
 import logging
 
 from ghidra_pcode_interpreter.state import State
-from ghidra_pcode_interpreter.utils import get_api_base
+from ghidra_pcode_interpreter.utils import get_api_base, get_func_extents, \
+        format_loc
 
 logger = logging.getLogger(__name__)
+
+PRINT_LOCATION_EVERY = 100
 
 def get_parameters(func):
     def get_param_val(param):
@@ -36,15 +39,17 @@ def get_parameters(func):
 
     return [(param, get_param_val(param)) for param in params]
 
-def get_func_extents(func):
-    addr_set = func.getBody()
-    min_addr, max_addr = addr_set.getMinAddress(), addr_set.getMaxAddress()
-    return min_addr, max_addr
-
 def run_pcode(func, state, stop_addr):
     cur_loc = state.get_pc()
+    api_base = get_api_base(getFunctionAt)
+    index = 0
     while cur_loc != stop_addr:
-        logging.debug("Current location: 0x{:x}".format(cur_loc))
+        if index % PRINT_LOCATION_EVERY == 0:
+            logging.info("Current location: {}".format(
+                    format_loc(api_base, cur_loc))
+                    )
+        index += 1
+        #setCurrentLocation(toAddr(cur_loc)) // Really slows things down
         cur_loc = state.execute_cur_location()
         logging.debug("State: {}".format(state))
 
@@ -55,7 +60,12 @@ def analyze_func_at(addr):
     :type addr: int
     """
     # Setup necessary emulator state 
+    # TODO Move this somewhere better
     state = State(get_api_base(getInstructionAt))
+    state.ram.store(0x08, 8, 0x0000000000414141)
+    state.ram.store(0x10, 8, 0x0000000000333231)
+    state.ram.store(0x18, 8, 0x0000000000000000)
+    state.ram.store(0x20, 8, 0x0041414141414141)
 
     # Find the function surrounding addr
     containing_func = None
@@ -86,7 +96,6 @@ def analyze_func_at(addr):
     # Read the return value
     return_obj = containing_func.getReturn()
     return_varnode = return_obj.getFirstStorageVarnode()
-    logging.debug(return_obj)
     orig_outval = state.read_varnode(return_varnode)
 
     # Determine if output should be interpreted as signed
@@ -104,10 +113,16 @@ def analyze_func_at(addr):
         if sign == 1:
             outval = -((~outval & (2**64 - 1)) + 1)
 
+    logger.info("Final state: {}".format(state))
     logger.info("Output value: {} or 0x{:x}".format(outval, orig_outval))
 
 def main():
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.DEBUG, 
+            filename="/tmp/pcode_interpret.log", filemode="w")
+    l_sh = logging.StreamHandler()
+    l_sh.setLevel(logging.INFO)
+    logging.getLogger('').addHandler(l_sh)
+
     curr_addr = 0
     if currentLocation is None:
         curr_addr = askAddress("Starting Address", "Provide starting address:")

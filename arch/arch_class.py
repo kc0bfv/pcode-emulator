@@ -20,10 +20,10 @@ class Architecture(object):
     callother_dict = None
 
     INIT_STACK_SIZE = 0x100000
-    reg_offset_lookedup = list()
 
     def __init__(self, api_base):
         self.api_base = api_base
+        self.reg_offset_lookedup = dict()
 
         # Determine settings of the current architecture
         self.cur_prog = self.api_base.getCurrentProgram()
@@ -91,14 +91,14 @@ class Architecture(object):
         if offset not in self.reg_offset_lookedup:
             # Multiple regs might have the same offset, e.g. EIP and RIP
             matching_regs = [reg for reg in self.lang.getRegisters()
-                    if reg.getOffset() == offset]
+                    if long(reg.getOffset()) == long(offset)]
             # We want to return the highest parent reg that has same offset
             best_match = matching_regs[0]
             next_try = best_match.getParentRegister()
             while next_try is not None and next_try.getOffset() == offset:
                 best_match = next_try
                 next_try = best_match.getParentRegister()
-            self.reg_offset_lookedup[offset] = best_match.name
+            self.reg_offset_lookedup[offset] = best_match
 
         return self.reg_offset_lookedup[offset]
 
@@ -167,3 +167,16 @@ class Architecture(object):
         else:
             raise RuntimeError("No callother implemented for {} {}".format(
                     callother_index, param))
+
+    def __str__(self):
+        format_parts = [
+                ("Architecture language description", self.lang_desc),
+                ("Processor", self.proc),
+                ("Prog ctr", self.pc),
+                ("Endianness", self.endian),
+                ("Register length", self.reg_len),
+                ("Stack varnode", self.stack_varnode),
+                ("Callothers Known", self.return_callother_names())
+            ]
+        return ", ".join("{}: {}".format(tup[0], tup[1])
+                for tup in format_parts)

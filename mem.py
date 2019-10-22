@@ -5,6 +5,7 @@ from ghidra.program.model.mem import MemoryAccessException
 
 from .instr import instruction_finder
 from .arch import LE, BE
+from .mem_markers import UniqueMarker
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +56,17 @@ class MemChunk(defaultdict):
         return not self._validate_code(addr)
 
     def store(self, address, length, value):
-        """Store a value at the given address, of "length" bytes, specified
-        endianness (mem.BE or mem.LE).
+        """Store a value at the given address, of "length" bytes, with
+        endianness matching the architecture
 
-        TODO param defines
+        :param address: The index at which to store value
+        :type addres: int
+        :param length: The number of bytes over which to store value
+        :type length: int
+        :param value: The value to store
+        :type value: int
+
+        :raises InvalidAddrException: When the address was not writeable
         """
         if not self._validate_writeable(address):
             raise InvalidAddrException("Tried write at non-writeable spot")
@@ -83,10 +91,22 @@ class MemChunk(defaultdict):
             self[st_loc] = cur_val & (2**self.arch.bits_per_byte - 1)
             cur_val >>= self.arch.bits_per_byte
 
-    def load(self, address, length):
+    def load_byte(self, address):
+        """Load just one byte from address
         """
-        Load a value from the given address, of "length" bytes, specified
-        endianness (mem.BE or mem.LE)
+        return self[address]
+
+    def load(self, address, length):
+        """Load a value from the given address, of "length" bytes, with
+        endianness matching the architecture.
+
+        :param address: The index from which to load
+        :type addres: int
+        :param length: The number of bytes to load
+        :type length: int
+
+        :return: The value loaded
+        :rtype: int
         """
         address = long(address)
 
@@ -96,21 +116,13 @@ class MemChunk(defaultdict):
                 st_loc = address + ind
             else:
                 st_loc = address + ((length - 1) - ind)
-            if st_loc in self:
-                cur_val += self[st_loc] << (ind * self.arch.bits_per_byte)
-            else:
-                try:
-                    cur_val += self.api_base.getByte(
-                            self.api_base.toAddr(address + ind)
-                        ) << (ind * self.arch.bits_per_byte)
-                except MemoryAccessException as e:
-                #except None as e:
-                    cur_val += 0 << (ind * self.arch.bits_per_byte)
+            one_byte = self.load_byte(st_loc) % 256
+            cur_val += one_byte << (ind * self.arch.bits_per_byte)
         return long(cur_val)
 
     def __str__(self):
         sorted_keys = sorted(self.keys())
-        return ", ".join("0x{:x}: {}".format(key, self[key]) for key in sorted_keys)
+        return ", ".join("0x{:x}: {}".format(key, hex(self[key])) for key in sorted_keys)
 
 class Registers(MemChunk):
     def _validate_writeable(self, addr):
@@ -118,10 +130,72 @@ class Registers(MemChunk):
         # registers.
         return True
 
-class Uniques(Registers):
-    pass
+    def __str__(self):
+        def fmt_key(key):
+            reg = None
+            try:
+                # Get the register object if possible
+                reg = self.arch.lookup_reg_by_offset(key)
+            except IndexError as e:
+                logging.debug("Register not found {} {}".format(key, e))
+
+            reg_size = 1
+            reg_name = key
+            if reg is not None:
+                reg_size = reg.getMinimumByteSize()
+                reg_name = "{}({:x})".format(reg.name, key)
+            out_txt = "{}: 0x{:x}".format(reg_name, self.load(key, reg_size))
+            used_keys = set(range(key, key + reg_size))
+            return out_txt, used_keys
+        sorted_keys = sorted(self.keys())
+        vals = list()
+        all_used_keys = set()
+        for key in sorted_keys:
+            if key in all_used_keys:
+                continue
+            out_txt, used_keys = fmt_key(key)
+            all_used_keys = all_used_keys.union(used_keys)
+            vals.append(out_txt)
+        return ", ".join(vals)
+
+class Uniques(MemChunk):
+    def _validate_writeable(self, addr):
+        # This assumes that Ghidra will only try to write to writeable
+        # uniques.
+        return True
+
+    def store(self, address, length, value):
+        """Store a value just like for the parent class, however, if
+        the value is a UniqueMarker instance, store it as a special case 
+        at only the address.
+        """
+        if isinstance(value, UniqueMarker):
+            self[address] = value
+        else:
+            super(Uniques, self).store(address, length, value)
+    def load(self, address, length):
+        """Load a value just like for the parent class, however, if
+        the value is a UniqueMarker instance return only it.
+        """
+        if isinstance(self[address], UniqueMarker):
+            return self[address]
+        else:
+            return super(Uniques, self).load(address, length)
 
 class Ram(MemChunk):
+    def load_byte(self, address):
+        if address in self:
+            return self[address]
+        else:
+            try:
+                # It handles 64 bit values better when they're hex strings
+                # without an L at the end
+                addr = self.api_base.toAddr(hex(long(address))[:-1])
+                return self.api_base.getByte(addr)
+            except MemoryAccessException as e:
+                logger.debug("mem access except")
+                return 0
+
     def get_code(self, address):
         if not self._validate_code(address):
             raise InvalidAddrException("No code at address")

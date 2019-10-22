@@ -17,6 +17,12 @@ class State(object):
         self.uniques = None
 
     def execute_cur_location(self):
+        return self._step_cur_loc(True)
+
+    def inspect_cur_location(self):
+        return self._step_cur_loc(False)
+
+    def _step_cur_loc(self, do_execute):
         self.uniques = Uniques(self.api_base, self.arch)
 
         # Get the instructions and instruction size
@@ -26,12 +32,15 @@ class State(object):
         self.step_pc()
 
         # Execute each instruction
+        run_type = "Executing" if do_execute else "Instruction"
+        log_type = logger.debug if do_execute else logger.info
         for instr in instrs:
-            logger.debug("Executing {}".format(instr))
-            instr.execute(self)
+            log_type("{} {}".format(run_type, instr))
+            if do_execute:
+                instr.execute(self)
+            logger.debug(self)
 
         return self.get_pc()
-
 
     def __str__(self):
         return "Registers {}\nRam {}\nUniques {}".format(self.registers,

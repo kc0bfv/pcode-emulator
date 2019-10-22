@@ -18,7 +18,8 @@ class x86(Architecture):
         state.registers.store(self.pc_offset, self.reg_len, func_addr)
 
     def co_swi(self, state, callother_index, param):
-        raise RuntimeError("Called swi, not implemented!")
+        state.registers.store(self.lookup_reg_offset("EAX"), self.reg_len, 0)
+        #raise RuntimeError("Called swi, not implemented!")
 
     # This definition must come after the functions are defined...
     callother_dict = {

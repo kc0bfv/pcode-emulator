@@ -10,6 +10,7 @@ import logging
 import re
 
 from .utils import find_all_subclasses
+from .mem_markers import CallOtherMarker
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ class Load(Instruction):
 class Store(Instruction):
     opcode = 3
     def _simple_exec_handler(self, state, inputs):
-        state.ram.store(inputs[1], self.pcode.inputs[1].size, inputs[2])
+        state.ram.store(inputs[1], self.pcode.inputs[2].size, inputs[2])
         return None
 
 class Branch(Instruction):
@@ -128,11 +129,24 @@ class CBranch(Branch):
             return None
 
 class BranchInd(Instruction):
+    """Indirect branch or call.  Dereference input 0, then jump to the
+    result.  Alternatively - if input 0 is an instance of CallOtherMarker,
+    that means the program should continue on without interruption.
+    """
     opcode = 6
     def _simple_exec_handler(self, state, inputs):
-        next_loc = state.ram.load(inputs[0], self.pcode.inputs[0].size)
-        state.registers.store(self.arch.pc_offset, self.arch.reg_len,
-                next_loc)
+        if not isinstance(inputs[0], CallOtherMarker):
+            next_loc = inputs[0]
+            state.registers.store(self.arch.pc_offset, self.arch.reg_len,
+                    next_loc)
+            return None
+
+
+            next_loc = state.ram.load(inputs[0], self.pcode.inputs[0].size)
+            logger.debug("in {} sz {} next {}".format(inputs[0], self.pcode.inputs[0].size, next_loc))
+            logger.debug("ins {}".format(self.pcode.inputs))
+            state.registers.store(self.arch.pc_offset, self.arch.reg_len,
+                    next_loc)
         return None
 
 class Call(Branch):
@@ -149,16 +163,17 @@ class CallOther(Instruction):
     "improvingDisassemblyAndDecompilation.tex" has this to say about them: "These operations show up as CALLOTHER Pcode ops in the Pcode field in the Listing.  They can have inputs and outputs, but otherwise are treated as black boxes by the decompiler."
 
     In this code, we have to look up the operation in an architecture
-    specific way, then execute it.  Our return value needs to be the next
-    location to execute.
+    specific way, then execute it.  Our return value needs to be a pointer to
+    the next location to execute, because it will get "CallInd" executed
+    on it.  Alternatively, CallInd/BranchInd will understand an instance of
+    CallOtherMarker being returned, and will simply continue executing code
+    without branching, when it is found.
     """
     opcode = 9
     def _simple_exec_handler(self, state, inputs):
-        cur_next_pc = state.registers.load(self.arch.pc_offset,
-                self.arch.reg_len)
         other_op = state.arch.resolve_callother(inputs[0], inputs[1])
         retval = other_op(state, inputs[0], inputs[1])
-        return cur_next_pc if retval is None else retval
+        return CallOtherMarker() if retval is None else retval
         
 
 class Return(Instruction):
@@ -322,10 +337,10 @@ class Int_Left(Instruction):
 class Int_Right(Instruction):
     opcode = 30
     def _simple_exec_handler(self, state, inputs):
-        unsigned_ver = int.from_bytes(
-                inputs[0].to_bytes(
-                        self.pcode.inputs[0].size, "big", signed=True)
-                , "big", signed=False)
+        unsigned_ver = inputs[0]
+        if inputs[0] < 0:
+            unsigned_ver = self._get_2s_comp(abs(inputs[0]),
+                    self.pcode.inputs[0].size)
         return unsigned_ver >> inputs[1]
 
 class Int_SRight(Instruction):
